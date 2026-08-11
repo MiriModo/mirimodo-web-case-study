@@ -395,7 +395,7 @@ async function main() {
    *
    * Without it, `npm run build` would overwrite `gallery.generated.ts` with an
    * empty list, and the built site would be left without a gallery even though
-   * all 681 derivatives in `public/gallery/` are exactly where they should be.
+   * every derivative in `public/gallery/` is exactly where it should be.
    *
    * The check at the start of `main()` does not cover this case: there the
    * whole folder is missing, here the folder exists and is merely empty.
