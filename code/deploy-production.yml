@@ -1,0 +1,230 @@
+# Publishing the MIRIMODO site to ROMARG shared hosting, over explicit FTPS.
+#
+# For now it starts ONLY manually, from the Actions tab. Automatic start on push
+# is enabled later, after the first successful deploy: see DEPLOYMENT.md.
+#
+# Only the contents of the `dist` folder are published. The project source never
+# reaches the server.
+name: Deploy productie (ROMARG)
+
+on:
+  workflow_dispatch:
+
+# The workflow only reads the repository. It never writes anything back to Git.
+permissions:
+  contents: read
+
+# Two simultaneous publishes would overwrite the same files on the server.
+# `cancel-in-progress: false` is deliberate: a publish interrupted halfway would
+# leave the site mixed, with new assets and an old `index.html`.
+concurrency:
+  group: deploy-productie
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build si publicare
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Descarca sursa
+        uses: actions/checkout@v6
+
+      - name: Pregateste Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Instaleaza dependentele
+        run: npm ci
+
+      - name: Verificare de tipuri
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # No old build is allowed to mix with the new one.
+      - name: Sterge build-ul anterior
+        run: rm -rf dist
+
+      # The VITE_* variables are supplied ONLY here. Vite inlines them into the
+      # bundle, so everything placed here becomes public: anon keys only, never
+      # service or admin keys.
+      - name: Build de productie
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.VITE_GOOGLE_MAPS_API_KEY }}
+        run: npm run build
+
+      - name: Valideaza build-ul
+        run: |
+          set -euo pipefail
+
+          obligatorii=(
+            dist/index.html
+            dist/.htaccess
+            dist/robots.txt
+            dist/sitemap.xml
+            dist/brand/favicon.svg
+            dist/brand/favicon.png
+          )
+          for fisier in "${obligatorii[@]}"; do
+            if [ ! -f "$fisier" ]; then
+              echo "Lipseste din build: $fisier"
+              exit 1
+            fi
+          done
+
+          if [ ! -d dist/assets ] || [ -z "$(ls -A dist/assets)" ]; then
+            echo "dist/assets lipseste sau este gol"
+            exit 1
+          fi
+
+          # Nothing from the source and no secret may end up in what is published.
+          interzise=(
+            dist/.env
+            dist/src
+            dist/scripts
+            dist/materiale
+            dist/package.json
+            dist/package-lock.json
+            dist/vite.config.ts
+            dist/tsconfig.json
+          )
+          for cale in "${interzise[@]}"; do
+            if [ -e "$cale" ]; then
+              echo "Nu are ce cauta in build: $cale"
+              exit 1
+            fi
+          done
+
+          if find dist \( -name '*.map' -o -name '.env*' \) | grep -q .; then
+            echo "Build-ul contine fisiere .map sau .env"
+            exit 1
+          fi
+
+          echo "Build valid: $(find dist -type f | wc -l) fisiere, $(du -sh dist | cut -f1)"
+
+      - name: Instaleaza lftp
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends lftp
+
+      # TEMPORARY DIAGNOSTIC STEP.
+      #
+      # Checks the FTPS handshake and the server certificate without uploading
+      # anything. Removed once the first publish succeeds.
+      #
+      # It never prints the username, the password or the server contents.
+      # Values coming from secrets are masked by GitHub in the log anyway.
+      - name: Diagnostic FTPS, fara upload
+        env:
+          FTP_HOST: ${{ secrets.ROMARG_FTP_HOST }}
+          FTP_PORT: ${{ secrets.ROMARG_FTP_PORT }}
+          FTP_USERNAME: ${{ secrets.ROMARG_FTP_USERNAME }}
+          LFTP_PASSWORD: ${{ secrets.ROMARG_FTP_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          echo "== 0. Portul din secret =="
+          if [ "$FTP_PORT" = "21" ]; then
+            echo "Portul este 21, deci FTPS explicit (AUTH TLS pe conexiunea de control)."
+          else
+            echo "ATENTIE: portul din secret nu este 21."
+            echo "Pe 990 ar fi FTPS implicit, care cere alta configurare."
+            exit 1
+          fi
+          echo
+
+          # `-starttls ftp` sends the AUTH TLS command, i.e. exactly the explicit
+          # FTPS mechanism. This step sends no username and no password: the
+          # handshake is tested on its own, before authentication.
+          echo "== 1. Handshake TLS, inainte de orice autentificare =="
+          raspuns="$(openssl s_client -connect "$FTP_HOST:$FTP_PORT" -starttls ftp \
+            -servername "$FTP_HOST" -verify_hostname "$FTP_HOST" \
+            </dev/null 2>&1 || true)"
+
+          printf '%s\n' "$raspuns" | grep -E '^(depth=|verify |Verify return code)' || true
+          echo
+
+          echo "== 2. Certificatul prezentat de server =="
+          printf '%s\n' "$raspuns" | openssl x509 -noout -subject -issuer -startdate -enddate \
+            || { echo "Handshake TLS esuat: serverul nu a prezentat un certificat lizibil."; exit 1; }
+          echo
+          echo "Nume acoperite de certificat:"
+          printf '%s\n' "$raspuns" | openssl x509 -noout -ext subjectAltName || true
+          echo
+
+          # Same settings as the real publish. It only lists the root, it
+          # uploads nothing. Output goes to /dev/null so the server contents
+          # never reach the log.
+          echo "== 3. Sesiune lftp completa, cu setarile de la publicare =="
+          lftp -u "$FTP_USERNAME" --env-password -p "$FTP_PORT" "ftp://$FTP_HOST" -e "
+          set ftp:ssl-force true;
+          set ftp:ssl-protect-data true;
+          set ftp:ssl-protect-list true;
+          set ssl:verify-certificate true;
+          set ssl:check-hostname true;
+          set ftp:passive-mode true;
+          set net:max-retries 1;
+          set net:timeout 20;
+          set cmd:fail-exit true;
+          cls -1 -d /;
+          bye
+          " > /dev/null
+          echo "Conexiune FTPS stabilita, autentificare reusita, radacina accesibila."
+
+      # Explicit FTPS, i.e. AUTH TLS on port 21, in passive mode, with
+      # certificate verification enabled. The password reaches lftp through the
+      # LFTP_PASSWORD environment variable, so it never appears on the command
+      # line.
+      #
+      # The FTP account already has `public_html` as its root, which is why the
+      # destination is `/` and not `/public_html`.
+      #
+      # `--ignore-time` compares by size, not by date: files regenerated on every
+      # build always carry a new date and would otherwise re-upload all ~112 MB
+      # every time. The small files that could change while keeping their size
+      # are uploaded explicitly below anyway.
+      #
+      # `index.html` is excluded from the mirror and uploaded last, after the
+      # assets, so there is never a moment where the page requests files that
+      # have not arrived yet.
+      - name: Publica prin FTPS explicit
+        env:
+          FTP_HOST: ${{ secrets.ROMARG_FTP_HOST }}
+          FTP_PORT: ${{ secrets.ROMARG_FTP_PORT }}
+          FTP_USERNAME: ${{ secrets.ROMARG_FTP_USERNAME }}
+          LFTP_PASSWORD: ${{ secrets.ROMARG_FTP_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          MIRROR_EXCLUDES="--exclude '^index\.html' --exclude '^\.htaccess' --exclude '^robots\.txt' --exclude '^sitemap\.xml' --exclude '^cgi-bin/' --exclude '^\.well-known/' --exclude '^\.ftpquota'"
+
+          lftp -u "$FTP_USERNAME" --env-password -p "$FTP_PORT" "ftp://$FTP_HOST" -e "
+          set ftp:ssl-force true;
+          set ftp:ssl-protect-data true;
+          set ftp:ssl-protect-list true;
+          set ssl:verify-certificate true;
+          set ssl:check-hostname true;
+          set ftp:passive-mode true;
+          set net:max-retries 3;
+          set net:timeout 20;
+          set cmd:fail-exit true;
+          set xfer:clobber on;
+          mirror --reverse --delete --ignore-time --no-perms --parallel=4 --verbose $MIRROR_EXCLUDES dist/ /;
+          put dist/.htaccess -o /.htaccess;
+          put dist/robots.txt -o /robots.txt;
+          put dist/sitemap.xml -o /sitemap.xml;
+          put dist/index.html -o /index.html;
+          bye
+          "
+
+      - name: Rezumat
+        run: |
+          echo "Publicat din commit ${GITHUB_SHA:0:7}, ramura ${GITHUB_REF_NAME}."
+          echo "Verifica https://mirimodo.ro cu reincarcare fortata (Ctrl+Shift+R)."
