@@ -54,92 +54,67 @@ would have added weight without removing work.
 
 ## Engineering highlights
 
-### Recovering a project that had no version control
+### Recovering a project with no version control
 
-The site was live, but the source had drifted from what was actually published
-and nothing was under version control. I reconstructed the source until a clean
-build reproduced the deployed archive, then compared the two artefact by
-artefact, including Vite's content-hashed filenames, which only match when the
-inputs match byte for byte. Every file was identical. Only then did the project
-go into Git, which is why the commit history is much younger than the site.
+The site was already live, but the source had drifted from production and
+nothing was under version control. I reconstructed the source until a clean
+build matched the deployed version, verified the output artefact by artefact,
+then placed the project under Git.
 
 ### Automated deployment to legacy shared hosting
 
-The hosting predates anything with a deploy API: Apache, cPanel, FTP. I built a
-GitHub Actions pipeline that type-checks, lints, builds, then uploads over
-explicit FTPS with certificate verification enabled. Between build and upload
-sits a validation gate that refuses to publish if a required file is missing, if
-anything from the source tree leaked into the output, or if a `.env` file or a
-sourcemap appears. `index.html` uploads last, after the assets, so there is
-never a moment where the live page requests files that have not arrived. When a
-deploy failed, the diagnostic step traced it to an expired certificate on the
-hosting side, and the fix was renewal rather than turning verification off.
+I built a GitHub Actions pipeline that type-checks, lints, builds, validates,
+and deploys over FTPS with certificate verification enabled. The validation gate
+blocks releases containing missing required files, source leakage, .env files,
+or sourcemaps. Assets upload before index.html to avoid broken intermediate
+states. A failed deployment was traced to an expired hosting certificate and
+fixed without disabling TLS verification.
 
-### URL canonicalisation, verified against a real Apache
+### URL canonicalisation tested on real Apache
 
-The same page was reachable at four addresses: http and https, with and without
-`www`, with and without a trailing slash. Search engines treat those as
-competing duplicates, and a `canonical` tag is only a hint. I wrote `.htaccess`
-rules and then tested them properly, in a Docker `httpd` container with
-`mod_rewrite` and TLS, across 19 cases covering query strings, real directories
-and the proxy headers shared hosting adds. The test caught something reading
-alone would not have: the obvious rule order made `http://www.example/page/`
-take two redirects. Reordering brought the worst case down to one hop, and all
-19 cases pass with no loop.
+I implemented .htaccess rules to normalize HTTP/HTTPS, www, and trailing-slash
+variants, then tested them in a Docker Apache environment with mod_rewrite and
+TLS. Nineteen cases covering query strings, directories, and proxy headers now
+resolve with no loops and at most one redirect.
 
-### An SEO audit tool, and what it found
+### Custom SEO audit tooling
 
-Rather than click through pages, I wrote a script that renders every route
-outside the browser and reports structure. It found four pages with no `h1` at
-all, and something worse: the 404 route had no SEO handling, so it inherited the
-title, canonical URL and robots directive of whichever page the visitor came
-from. Any mistyped URL could be indexed as a duplicate of a real page. Both are
-fixed, along with JSON-LD for `TravelAgency`, `Organization`, `WebSite` and
-breadcrumbs on nine pages. The audit now runs as `npm run seo`.
+I wrote a script that renders every route and checks structural SEO issues. It
+found four pages without an h1 and a 404 route that inherited SEO metadata from
+the previous page, which could create duplicate indexing. I fixed both and added
+JSON-LD for TravelAgency, Organization, WebSite, and breadcrumbs.
 
-### An image pipeline for photos that arrive by WhatsApp
+### Image processing pipeline
 
-The agency's photos come from tourists, at unpredictable sizes and orientations,
-carrying whatever metadata the phone attached. The build script applies the EXIF
-orientation and then strips every metadata segment, because the GPS coordinates
-in a holiday photo are not the agency's to publish. It emits two distinct WebP
-sets, thumbnails and lightbox sizes, so the feed never downloads a full-size
-image, plus a 24-pixel blurred placeholder inlined as base64 to hold layout.
-296 source photos become 1,215 derivatives. An incremental cache means only new
-or changed photos are reprocessed, and SHA-1 hashing means the same photo filed
-in two folders is never published twice.
+I built a pipeline for tourist photos arriving in inconsistent formats and
+sizes. It normalizes orientation, strips metadata, generates thumbnail and
+lightbox WebP variants, creates blurred placeholders, and uses incremental
+caching and SHA-1 deduplication. 296 source photos currently generate 1,215
+responsive derivatives.
 
-### Testing without a test framework
+### Lightweight production validation
 
-A single-page marketing site does not justify a full test setup, but it does
-have rules worth enforcing. I wrote a smoke test that renders every page to a
-string and asserts on the output, 111 assertions today. Some are structural:
-exactly one `h1` per public page. Some are legal: the word "organizăm" must
-appear nowhere, because the agency is an intermediary. Some protect people:
-every gallery photo must carry a confirmed consent flag, no 13-digit sequence
-that could be a national ID may appear on the legal page, and the logged-out
-internal panel must leak neither a request row nor any internal content.
+Instead of introducing a full test framework, I wrote a smoke test that renders
+every public page and currently runs 111 assertions. These checks cover
+structural rules, legal wording, consent flags, sensitive-data leakage, and
+internal-panel isolation.
 
-### Consent handled as a feature, not a banner
+### Consent as application logic
 
-The Google Maps embed does not load until the visitor accepts external content.
-The iframe is genuinely absent from the DOM, and a test asserts it. The cookie
-policy page is generated from a typed inventory file, so the published table
-cannot drift from what the site actually stores. Gallery photos pass a consent
-gate before they reach the feed.
+Google Maps does not load until external-content consent is granted, and tests
+verify that the iframe is absent beforehand. Gallery images must pass a consent
+gate, and the cookie policy is generated from a typed inventory so published
+information stays aligned with actual site behavior.
 
-### A CSS trap, and a limitation I did not paper over
+### CSS architecture and known limitations
 
-The mobile menu needed a dimmed, blurred backdrop. Placed inside the header it
-covered only the top bar, because `backdrop-filter` turns an element into a
-containing block for `position: fixed` descendants, so the overlay was confined
-to its parent. Moving it to a portal on `body` fixed it.
+A mobile-menu overlay was moved to a portal on body after backdrop-filter
+created an unexpected containing block for fixed descendants.
 
-Worth stating plainly: metadata and JSON-LD are injected client-side. Google
-renders JavaScript, so search is fine, but social scrapers do not, and link
-previews fall back to the static `index.html`. That is a real limitation of the
-current SPA architecture, and fixing it properly means server-side rendering
-rather than a workaround.
+The current SPA injects metadata and JSON-LD client-side. Google renders it
+correctly, but social scrapers do not, so link previews rely on static metadata.
+Properly solving this would require server-side rendering rather than a
+workaround.
 
 ## Screenshots
 
@@ -148,9 +123,19 @@ rather than a workaround.
 | ![Home page](screenshots/01-home-desktop.jpg) | ![Services hub](screenshots/02-services-desktop.jpg) |
 | **Home**, hero and primary funnel entry | **Services hub**, sticky section nav and alternating two-column layout |
 | ![Gallery](screenshots/03-gallery-filters-masonry.jpg) | ![Request wizard](screenshots/04-request-wizard.jpg) |
-| **Gallery**, country filters with live counts over a masonry grid | **Request wizard**, four steps with a running summary |
-| ![Lightbox](screenshots/05-gallery-lightbox.jpg) | |
-| **Lightbox**, accessible modal portalled out of the page | |
+| **Gallery**, country filters with live counts, then a second level of filters per locality | **Request wizard**, the final step with the running summary filled in |
+
+![Lightbox](screenshots/05-gallery-lightbox.jpg)
+
+**Lightbox**, an accessible modal portalled out of the page. The counter reads
+19 of 24 rather than 19 of 296, because navigation stays inside the active
+filter.
+
+<img src="screenshots/06-mobile.jpg" width="320" alt="Home page on a phone">
+
+**Mobile**, the same site on a phone. The bottom bar with a central action and
+the floating contact button are built for touch, not scaled down from the
+desktop layout.
 
 ## Code samples
 
