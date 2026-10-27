@@ -1,18 +1,17 @@
 /**
  * Generator for the tourist photo feed.
  *
- *   materiale/galerie/<country>/<locality>/*.jpg|jpeg|png|webp  (originals, local)
- *              │  npm run galerie
- *              ▼
- *   public/gallery/<country>/<locality>/*.webp                  (optimised derivatives)
- *   src/data/gallery.generated.ts                               (the data the site reads)
+ * Input:  materiale/galerie/<country>/<locality>/*.jpg|jpeg|png|webp (originals, local only)
+ * Run:    npm run galerie
+ * Output: public/gallery/<country>/<locality>/*.webp (optimised copies)
+ *         src/data/gallery.generated.ts (the data the site reads)
  *
  * What it does for every photo:
  *  - applies the EXIF orientation, then STRIPS all metadata (including the
- *    phone's GPS coordinates), mandatory for tourists' photos;
+ *    phone's GPS coordinates), which is a must for tourists' photos;
  *  - generates TWO sets of WebP variants:
- *      · thumbnails (320 / 640 / 960 px) for the feed grid;
- *      · large images (1280 / 1920 px) for the lightbox;
+ *      - thumbnails (320 / 640 / 960 px) for the feed grid;
+ *      - large images (1280 / 1920 px) for the lightbox;
  *    the original photo never reaches the page;
  *  - generates a tiny blurred placeholder, inlined in the data (base64, ~0.5 KB);
  *  - records the real dimensions and orientation so the page does not "jump".

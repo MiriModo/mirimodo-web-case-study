@@ -1,101 +1,94 @@
 # Code samples
 
-These are sanitized excerpts from the production codebase. The code is
-unmodified; the original inline comments have been preserved and translated
-from Romanian.
+These files come from the production codebase, with sensitive bits removed
+(no project URLs, keys or private repo names, only the names of the secrets).
+The code itself is the same; I translated the comments from Romanian to
+English.
 
-Everything else stays in Romanian on purpose: variable names, user-facing
-strings, `aria-label`s, console output. This is a Romanian product built for a
-Romanian client, and translating those would misrepresent the codebase.
+Variable names, UI strings, `aria-label`s and console output are still in
+Romanian. The site is Romanian and so is the client, so I left them as they
+are on purpose.
 
-One file is a partial excerpt, marked as such in its own header: `ssr-smoke.tsx`.
-The other six are complete.
+Three files are excerpts and say so in their header:
+`ArticlesCalendar.excerpt.tsx`, `contact-guard.excerpt.ts` and `articole.sql`
+(only the seed rows are missing from that one). The rest are full files.
 
-## `GalleryLightbox.tsx`, frontend
+## Automated blog
 
-An accessible modal for the photo feed, in 218 lines.
+**`content.config.ts`** is a custom Astro content loader. At build time it
+reads the published articles from Supabase over REST and turns them into a
+normal Astro collection, so the blog pages are plain static HTML. The part I
+care about most is the error handling. A missing table means "no blog yet" and
+the build goes on, but any other error stops the build. Otherwise a Supabase
+outage would produce a site with zero articles, and the FTP mirror (which runs
+with `--delete`) would remove them from the server. There is also a small
+helper that finds 07:00 Romanian time for any date, so summer and winter time
+both work without a date library.
 
-Worth looking at: it renders through a portal into `body`, and the comment
-explains why that is not decoration. Rendered in place, `z-index: 200` achieved
-nothing, because a parent in the content opened a stacking context and trapped
-the lightbox inside it. The page header ended up above the close button, so
-pressing X opened the menu instead of closing the photo.
+**`articole.sql`** is the table and its Row Level Security. The public key can
+only read rows that are finished and whose date has come, so drafts and
+scheduled posts stay private even though the key is public. The cover images
+live in a public Storage bucket that only logged in staff can write to.
 
-Also here: a focus trap on Tab, Escape and arrow keys, touch swipe with a
-threshold, neighbour preloading so the arrows never wait on a download, and the
-card taking the photo's real aspect ratio through a CSS custom property so
-rounded corners never get drawn in the empty space beside a letterboxed image.
+**`ArticlesCalendar.excerpt.tsx`** is a piece of the editorial calendar in the
+internal panel. Nobody picks the article state by hand. It comes from what the
+article has: no text or no cover means Zero, both means Realizat, and Publicat
+is set later by the deploy. Covers are resized in a canvas before upload (max
+1600 px wide, JPEG), so 5 to 8 MB phone photos don't end up in Storage as they
+are. After saving, the message tells the person in plain Romanian what happens
+next.
 
-## `build-gallery.mjs`, image pipeline
+**`publica.ts`** is the Supabase Edge Function behind the "Publică acum"
+button. It checks the user's session, then sends a `repository_dispatch`
+event to GitHub, which starts the deploy workflow. The GitHub token never
+leaves the server side.
 
-Turns 296 source photos into 1,215 responsive derivatives.
+## Deploy
 
-Per photo: apply the EXIF orientation, then strip every metadata segment
-including the phone's GPS coordinates, which is mandatory for tourists' photos.
-Then two distinct WebP sets, thumbnails and lightbox sizes, so the feed never
-downloads a full-size image. Plus a 24 px blurred placeholder inlined as base64.
+**`deploy-production.yml`** runs on push, on the button from the panel and on
+two daily crons. The crons are in UTC because the `timezone:` key simply didn't
+fire one morning. Two runs (04:07 and 05:07 UTC) mean one of them always lands
+at 07:07 in Romania, summer or winter. Before uploading, the build is checked
+for missing files and for anything that shouldn't be public (`.env`, `src`,
+sourcemaps). The upload uses `lftp mirror --ignore-time`, which compares files
+only by size, so I added a sha256 manifest to catch files that changed but
+kept the same size (like a price edit in an article). `index.html` goes up
+last. At the end, published articles are marked as `publicat` in Supabase.
 
-Worth looking at: the incremental cache keyed on mtime, size and the presence of
-every expected output file; deduplication by SHA-1 so the same photo placed in
-two folders is not published twice; and the guard that refuses to overwrite a
-generated gallery with an empty list when the source folder is merely empty
-rather than absent.
+**`htaccess.conf`** is the Apache config from `public/.htaccess`. It makes
+http/https, www and trailing slash variants all collapse into one address with
+a single redirect, and maps clean URLs like `/contact` to `contact.html`.
+Having both `blog.html` and a `blog/` folder made `/blog` answer 403 at first,
+and the comments explain the rule order that fixed it.
 
-## `seo.ts`, metadata for a single-page app
+## Gallery
 
-Title, description, canonical, Open Graph and Twitter Card, applied per route
-with no external dependency.
+**`build-gallery.mjs`** is the image pipeline built on sharp. It turns 326
+original photos into 1,335 WebP files: EXIF rotation, then all metadata
+stripped (tourists' phones save GPS coordinates), thumbnails for the grid,
+bigger versions for the lightbox and a tiny blurred placeholder inlined as
+base64. It caches by size and mtime so only new photos get processed, skips
+duplicates by SHA-1, and refuses to overwrite the gallery with an empty one if
+the source folder is empty.
 
-Worth looking at: `robots` is written on every page, not only where it needs to
-change. Without that, SPA navigation left a stale value behind, which is how a
-404 route ended up inheriting the canonical URL of the previously visited page.
+**`GalleryLightbox.tsx`** is the photo viewer. It renders through a portal
+into `body`. Before that, a parent element created a stacking context and the
+page header ended up on top of the close button, so tapping X opened the menu.
+It also has a focus trap, keyboard and swipe navigation, and preloads the next
+and previous photos.
 
-## `structuredData.ts`, JSON-LD
+## Smaller pieces
 
-`TravelAgency` plus `LocalBusiness` plus `Organization`, a `WebSite` entity, and
-a `BreadcrumbList` builder used on nine pages.
+**`contact-guard.excerpt.ts`** is the protection on the contact form: a hidden
+honeypot field, a minimum fill time and two rate limits (per email and global).
+Bots get a fake "ok" so they don't learn they were blocked. The counts come
+from the `Content-Range` header of a `HEAD` request, so no rows are downloaded.
 
-Worth looking at what is deliberately absent: no `aggregateRating`, no `review`,
-no `geo`, no `priceRange`. Those values did not exist, and inventing structured
-data both risks penalties and misleads users.
+**`useViewportInset.ts`** is a hook that notices when the phone keyboard is
+open, using `visualViewport`. The bottom navigation and the WhatsApp button
+hide while the user is typing, so they don't cover the input.
 
-## `htaccess.conf`, URL canonicalisation
-
-The Apache rules that collapse http and https, www and non-www, trailing slash
-and none, into a single canonical URL. Copied from `public/.htaccess`, renamed
-only so the file is visible in a directory listing.
-
-Worth looking at: the comment on rule ordering. Ordered the obvious way,
-`http://www.example/page/` took two redirects. Since every rule already targets
-the full canonical address, moving the trailing-slash rule first means whichever
-matches first resolves everything, so one hop is the worst case.
-
-These rules were verified against a real Apache in Docker, with `mod_rewrite`
-and TLS, across 19 cases.
-
-## `deploy-production.yml`, CI/CD
-
-GitHub Actions to shared hosting over explicit FTPS.
-
-Worth looking at: the validation gate between build and upload. It refuses to
-publish if a required file is missing, if anything from the source tree leaked
-into `dist`, or if a `.env` file or a sourcemap turns up. And `index.html` is
-excluded from the mirror and uploaded last, so there is never a window where the
-page requests assets that have not arrived.
-
-Certificate verification stays on. A failing deploy turned out to be an expired
-certificate on the hosting side, and the fix was renewal rather than
-`ssl:verify-certificate false`.
-
-## `ssr-smoke.tsx`, testing without a test framework
-
-Renders every page to a string outside the browser and asserts on the result.
-111 assertions in the real file; this is an excerpt.
-
-Worth looking at what is being asserted. Not only whether a page renders, but
-also: every public page has exactly one `h1`; every gallery photo carries a
-confirmed consent flag; the Google Maps embed is absent until consent is given;
-no 13-digit sequence that could be a national ID number appears on the legal
-page; the logged-out internal panel leaks no row and no internal content; and
-the word "organizăm" appears nowhere, because the agency is legally an
-intermediary and not a tour operator.
+**`structuredData.ts`** builds the JSON-LD for the agency, the website,
+breadcrumbs and blog articles. It leaves out ratings, reviews and price range
+on purpose, because we don't have real data for them and I didn't want to
+make it up.

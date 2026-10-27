@@ -1,21 +1,40 @@
 # Publishing the MIRIMODO site to ROMARG shared hosting, over explicit FTPS.
 #
-# For now it starts ONLY manually, from the Actions tab. Automatic start on push
-# is enabled later, after the first successful deploy: see DEPLOYMENT.md.
+# Starts by itself on every push to `main`. The manual button in the Actions
+# tab stays, for a redeploy without a new commit: see DEPLOYMENT.md.
 #
-# Only the contents of the `dist` folder are published. The project source never
-# reaches the server.
+# Only the contents of the `dist` folder are published. The project source
+# never reaches the server.
 name: Deploy productie (ROMARG)
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
+  # The internal panel asks for an article dated today to go live right away:
+  # the Supabase function `publica` sends this event.
+  repository_dispatch:
+    types: [publica-blog]
+  # The blog: a build every morning, so scheduled articles show up on their
+  # day. The minute is "odd" on purpose, the full hour is busy on GitHub.
+  # Cron runs ONLY from the default branch (`main`); in a public repo it turns
+  # itself off after 60 days without a commit.
+  #
+  # Times are in UTC, without the `timezone` key: on 26.10.2026 the cron with
+  # `timezone: Europe/Bucharest` didn't start at all. Two runs, so one of them
+  # always lands at 07:07 Romanian time (05:07 UTC in winter, 04:07 UTC in
+  # summer) and a run skipped by GitHub gets caught by the other one. The extra
+  # run just republishes the same content.
+  schedule:
+    - cron: '7 4 * * *'
+    - cron: '7 5 * * *'
 
 # The workflow only reads the repository. It never writes anything back to Git.
 permissions:
   contents: read
 
-# Two simultaneous publishes would overwrite the same files on the server.
-# `cancel-in-progress: false` is deliberate: a publish interrupted halfway would
+# Two deploys at the same time would overwrite the same files on the server.
+# `cancel-in-progress: false` is on purpose: a deploy stopped halfway would
 # leave the site mixed, with new assets and an old `index.html`.
 concurrency:
   group: deploy-productie
@@ -50,14 +69,15 @@ jobs:
       - name: Sterge build-ul anterior
         run: rm -rf dist
 
-      # The VITE_* variables are supplied ONLY here. Vite inlines them into the
-      # bundle, so everything placed here becomes public: anon keys only, never
+      # The VITE_* variables are given ONLY here. Vite bakes them into the
+      # bundle, so anything put here becomes public: only anon keys, never
       # service or admin keys.
       - name: Build de productie
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_GOOGLE_MAPS_API_KEY: ${{ secrets.VITE_GOOGLE_MAPS_API_KEY }}
+          PUBLIC_GA_MEASUREMENT_ID: ${{ secrets.PUBLIC_GA_MEASUREMENT_ID }}
         run: npm run build
 
       - name: Valideaza build-ul
@@ -69,6 +89,8 @@ jobs:
             dist/.htaccess
             dist/robots.txt
             dist/sitemap.xml
+            dist/rss.xml
+            dist/blog.html
             dist/brand/favicon.svg
             dist/brand/favicon.png
           )
@@ -84,7 +106,7 @@ jobs:
             exit 1
           fi
 
-          # Nothing from the source and no secret may end up in what is published.
+          # Nothing from the source and no secret is allowed in what gets published.
           interzise=(
             dist/.env
             dist/src
@@ -117,10 +139,10 @@ jobs:
       # TEMPORARY DIAGNOSTIC STEP.
       #
       # Checks the FTPS handshake and the server certificate without uploading
-      # anything. Removed once the first publish succeeds.
+      # anything. To be removed once the first deploy works.
       #
-      # It never prints the username, the password or the server contents.
-      # Values coming from secrets are masked by GitHub in the log anyway.
+      # It doesn't print the user, the password or the server contents. Values
+      # coming from secrets are masked by GitHub in the log anyway.
       - name: Diagnostic FTPS, fara upload
         env:
           FTP_HOST: ${{ secrets.ROMARG_FTP_HOST }}
@@ -140,9 +162,9 @@ jobs:
           fi
           echo
 
-          # `-starttls ftp` sends the AUTH TLS command, i.e. exactly the explicit
-          # FTPS mechanism. This step sends no username and no password: the
-          # handshake is tested on its own, before authentication.
+          # `-starttls ftp` sends the AUTH TLS command, which is exactly how
+          # explicit FTPS works. No user and no password are sent in this step:
+          # the handshake is tested on its own, before authentication.
           echo "== 1. Handshake TLS, inainte de orice autentificare =="
           raspuns="$(openssl s_client -connect "$FTP_HOST:$FTP_PORT" -starttls ftp \
             -servername "$FTP_HOST" -verify_hostname "$FTP_HOST" \
@@ -159,9 +181,9 @@ jobs:
           printf '%s\n' "$raspuns" | openssl x509 -noout -ext subjectAltName || true
           echo
 
-          # Same settings as the real publish. It only lists the root, it
-          # uploads nothing. Output goes to /dev/null so the server contents
-          # never reach the log.
+          # Same settings as the real deploy. It only lists the root, it
+          # doesn't upload anything. The output goes to /dev/null so the server
+          # contents don't end up in the log.
           echo "== 3. Sesiune lftp completa, cu setarile de la publicare =="
           lftp -u "$FTP_USERNAME" --env-password -p "$FTP_PORT" "ftp://$FTP_HOST" -e "
           set ftp:ssl-force true;
@@ -178,22 +200,29 @@ jobs:
           " > /dev/null
           echo "Conexiune FTPS stabilita, autentificare reusita, radacina accesibila."
 
-      # Explicit FTPS, i.e. AUTH TLS on port 21, in passive mode, with
-      # certificate verification enabled. The password reaches lftp through the
-      # LFTP_PASSWORD environment variable, so it never appears on the command
+      # Explicit FTPS, meaning AUTH TLS on port 21, passive mode, with
+      # certificate verification on. The password reaches lftp through the
+      # LFTP_PASSWORD environment variable, so it never shows up in the command
       # line.
       #
-      # The FTP account already has `public_html` as its root, which is why the
-      # destination is `/` and not `/public_html`.
+      # The FTP account already has `public_html` as its root, that's why the
+      # target is `/` and not `/public_html`.
       #
-      # `--ignore-time` compares by size, not by date: files regenerated on every
-      # build always carry a new date and would otherwise re-upload all ~112 MB
-      # every time. The small files that could change while keeping their size
-      # are uploaded explicitly below anyway.
+      # `--ignore-time` compares by size, not by date: files regenerated on
+      # every build always have a new date, and otherwise all ~112 MB would be
+      # uploaded again every time.
+      #
+      # The side effect: a file that changed but kept the same size (a price
+      # fix "1.290 €" to "1.390 €" in an article) would never be uploaded. So
+      # every deploy leaves a manifest on the server (`.deploy-manifest`: hash,
+      # size, path for every file), and the next deploy compares it with the new
+      # build and explicitly uploads the files with a different hash and the
+      # same size, the ones mirror would skip. The manifest is blocked in
+      # `.htaccess`, it can't be opened in the browser.
       #
       # `index.html` is excluded from the mirror and uploaded last, after the
-      # assets, so there is never a moment where the page requests files that
-      # have not arrived yet.
+      # assets, so there is never a moment when the page asks for files that
+      # haven't arrived yet.
       - name: Publica prin FTPS explicit
         env:
           FTP_HOST: ${{ secrets.ROMARG_FTP_HOST }}
@@ -203,9 +232,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          MIRROR_EXCLUDES="--exclude '^index\.html' --exclude '^\.htaccess' --exclude '^robots\.txt' --exclude '^sitemap\.xml' --exclude '^cgi-bin/' --exclude '^\.well-known/' --exclude '^\.ftpquota'"
+          MIRROR_EXCLUDES="--exclude '^index\.html' --exclude '^\.htaccess' --exclude '^robots\.txt' --exclude '^sitemap\.xml' --exclude '^rss\.xml' --exclude '^\.deploy-manifest' --exclude '^cgi-bin/' --exclude '^\.well-known/' --exclude '^\.ftpquota'"
 
-          lftp -u "$FTP_USERNAME" --env-password -p "$FTP_PORT" "ftp://$FTP_HOST" -e "
+          LFTP_SETARI="
           set ftp:ssl-force true;
           set ftp:ssl-protect-data true;
           set ftp:ssl-protect-list true;
@@ -214,15 +243,96 @@ jobs:
           set ftp:passive-mode true;
           set net:max-retries 3;
           set net:timeout 20;
+          set xfer:clobber on;"
+
+          # 1. Manifest of the current build: hash, size, path (tab separated),
+          #    one line for every file in dist.
+          (
+            cd dist
+            find . -type f -printf '%P\n' | LC_ALL=C sort | while IFS= read -r fisier; do
+              printf '%s\t%s\t%s\n' \
+                "$(sha256sum -- "$fisier" | cut -d' ' -f1)" \
+                "$(stat -c %s -- "$fisier")" \
+                "$fisier"
+            done
+          ) > manifest-nou.tsv
+          echo "Manifest nou: $(wc -l < manifest-nou.tsv) fisiere"
+
+          # 2. Manifest of the previous deploy, from the server. It's missing on
+          #    the first deploy with a manifest; then lftp reports an error and
+          #    the local file stays empty or doesn't exist.
+          lftp -u "$FTP_USERNAME" --env-password -p "$FTP_PORT" "ftp://$FTP_HOST" -e "
+          $LFTP_SETARI
+          set cmd:fail-exit false;
+          get /.deploy-manifest -o manifest-vechi.tsv;
+          bye
+          " || true
+          [ -f manifest-vechi.tsv ] || : > manifest-vechi.tsv
+
+          # 3. The fixes: files present in both manifests, with a different
+          #    hash and the same size. Everything else (new files, changed size,
+          #    deleted files) is handled by mirror. Without an old manifest
+          #    there's no way to know what changed, so all text files get
+          #    uploaded once, since they're the only ones where a same size edit
+          #    is likely.
+          if [ -s manifest-vechi.tsv ]; then
+            awk -F'\t' '
+              NR == FNR { hash[$3] = $1; marime[$3] = $2; next }
+              ($3 in hash) && hash[$3] != $1 && marime[$3] == $2 { print $3 }
+            ' manifest-vechi.tsv manifest-nou.tsv > corecturi.txt
+          else
+            echo "Pe server nu exista inca .deploy-manifest: se reincarca toate fisierele text."
+            cut -f3 manifest-nou.tsv | grep -E '\.(html|xml|txt|css|js|mjs|json|svg|webmanifest)$' > corecturi.txt || true
+          fi
+
+          # The files below get uploaded explicitly anyway, at the end.
+          grep -vxE 'index\.html|\.htaccess|robots\.txt|sitemap\.xml|rss\.xml' corecturi.txt > corecturi-filtrate.txt || true
+
+          : > corecturi.lftp
+          while IFS= read -r cale; do
+            printf 'put "dist/%s" -o "/%s";\n' "$cale" "$cale" >> corecturi.lftp
+          done < corecturi-filtrate.txt
+          echo "Fisiere urcate explicit (aceeasi dimensiune, continut nou): $(wc -l < corecturi-filtrate.txt)"
+          head -50 corecturi-filtrate.txt
+
+          # 4. The actual deploy: mirror, then the fixes (the folders exist
+          #    after mirror), then the root files, then the manifest.
+          lftp -u "$FTP_USERNAME" --env-password -p "$FTP_PORT" "ftp://$FTP_HOST" -e "
+          $LFTP_SETARI
           set cmd:fail-exit true;
-          set xfer:clobber on;
           mirror --reverse --delete --ignore-time --no-perms --parallel=4 --verbose $MIRROR_EXCLUDES dist/ /;
+          source corecturi.lftp;
           put dist/.htaccess -o /.htaccess;
           put dist/robots.txt -o /robots.txt;
           put dist/sitemap.xml -o /sitemap.xml;
+          put dist/rss.xml -o /rss.xml;
           put dist/index.html -o /index.html;
+          put manifest-nou.tsv -o /.deploy-manifest;
           bye
           "
+
+      # "Realizat" articles whose day has come are now on the site: their state
+      # becomes "publicat", so the panel shows the truth. The service key lives
+      # only here, in the GitHub secrets, never in the site.
+      - name: Marcheaza articolele publicate
+        env:
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SERVICE_KEY:-}" ]; then
+            echo "Secretul SUPABASE_SERVICE_ROLE_KEY lipseste: starea articolelor nu se actualizeaza."
+            exit 0
+          fi
+          azi="$(TZ=Europe/Bucharest date +%F)"
+          curl -sS -f -X PATCH \
+            "$SUPABASE_URL/rest/v1/articole?stare=eq.realizat&data_publicare=lte.$azi" \
+            -H "apikey: $SERVICE_KEY" \
+            -H "Authorization: Bearer $SERVICE_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            -d '{"stare":"publicat"}'
+          echo "Articolele cu data pana la $azi sunt marcate publicate."
 
       - name: Rezumat
         run: |

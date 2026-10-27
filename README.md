@@ -1,162 +1,275 @@
-# MIRIMODO, production website for a travel agency
+# MIRIMODO, a production website for a travel agency
 
-A complete website for a Romanian travel agency: public marketing pages, a photo
-gallery built from the agency's own material, a four-step request funnel that
-writes to a database, and a password-protected internal panel.
+This is the website I built and still run for MIRIMODO, a travel agency in
+Romania. It has the public pages, a photo gallery made from real tourists'
+photos, a request form that saves to a database, a blog that publishes itself
+on schedule, and an internal panel for the agency staff.
 
 **Live: [mirimodo.ro](https://mirimodo.ro)**
 
-**Status:** Production · Live · Actively maintained
+**Status:** live in production and maintained by me.
 
 ## My role
 
-Designed, built, launched, and currently maintain a production website for a
-real travel agency client. I worked end-to-end across requirements, frontend
-implementation, responsive design, image processing, technical SEO, deployment,
-production debugging, and ongoing maintenance.
+I did the whole project by myself. That means talking with the agency about
+what they need, the design, the frontend, the database and the serverless
+functions, the image pipeline, SEO, the deploy pipeline and the hosting setup.
+After launch I kept going with fixes, new features and new content.
 
-## The project
+The work doesn't stop at the code:
 
-MIRIMODO is a travel agency in Târgu Jiu, Romania, trading since 2009. It is an
-*intermediary* agency rather than a tour operator, which is a legal distinction
-that shapes the product: the site may never claim the agency organises the
-packages it sells. That single constraint is enforced all the way down into an
-automated test.
+- **Analytics and search.** I handle Google Analytics (GA4), Google Search
+  Console and the Google Business Profile statistics myself. I check which
+  pages bring visitors, what people search for before they land on the site,
+  how the business listing performs and where indexing has problems. Then I
+  sit down with the agency and we decide the next steps from those numbers.
+- **The blog.** I take care of the blog posts myself and write them with what
+  I've learned from working in this field: how charters from Craiova really
+  work, what travel insurance covers, which resort fits a family and so on. I
+  use an AI assistant to get a first draft, but the insights, the local details
+  and the fact checking are mine. The build even refuses to publish an article
+  that still has a `[[VERIFICĂ]]` ("check this") mark in it.
 
-What the site does:
+## About the project
 
-- **10 public pages**, covering home, a services hub with 11 anchored sections,
-  about, photo gallery, contact, and four legal pages;
-- **a request funnel**, a four-step form with a live summary, writing to
-  Supabase (Postgres with Row Level Security);
-- **a photo gallery** of 296 real photos from 14 countries and 37 localities,
-  filterable by country and resort, with a masonry grid and an accessible
-  lightbox;
-- **an internal panel** on a hidden, `noindex` route where the agency reads
-  incoming requests and keeps its content playbooks.
+MIRIMODO has been around since 2009 in Târgu Jiu. It's an *intermediary*
+agency, meaning it sells packages from licensed tour operators and doesn't
+organise trips itself. That matters legally, so the site never says "we
+organise" anywhere, and I keep that wording rule in mind on every page.
 
-Roughly 29,000 lines across 79 components and 17 CSS modules.
+What the site has right now:
+
+- **11 public pages:** home, a services page with 11 sections you can jump to,
+  about us, gallery, a holiday request form, contact and four legal pages.
+- **A 4 step request form** with a live summary. It goes through a Supabase
+  Edge Function that validates it, saves it and emails both the client and the
+  agency.
+- **A contact form** with spam protection and email confirmation.
+- **A photo gallery** with 326 real photos from 16 countries and 42 places,
+  filterable by country and resort, with a lightbox.
+- **A blog** with categories, pagination, RSS, related posts and articles that
+  go live on their own on the planned day.
+- **An internal panel** on a hidden, `noindex` route, where the staff reads
+  holiday requests and contact messages and plans the blog in an editorial
+  calendar.
+
+In numbers: about 31,000 lines of code, 65 React components, 13 page views and
+20 CSS modules.
 
 ## Stack
 
-**Frontend:** React 19, TypeScript (strict), Vite, React Router 7, CSS Modules
+**Frontend:** Astro 7 (fully static output) with React 19 islands, TypeScript
+in strict mode, CSS Modules, nanostores for the cookie consent state.
 
-**Backend:** Supabase, using Auth, Postgres and Row Level Security
+**Backend:** Supabase. Auth for the staff, Postgres with Row Level Security,
+Storage for blog covers, and three Edge Functions written for Deno (`cerere`
+for requests, `contact` for messages, `publica` for publishing the blog).
 
-**Tooling:** sharp for the image pipeline, ESLint, custom SSR scripts for
-testing and auditing
+**Tooling:** sharp for all the image scripts (gallery, hero crops, service
+photos, Open Graph images), ESLint, `astro check`.
 
-**Infrastructure:** GitHub Actions building and publishing over explicit FTPS to
-Apache on shared hosting
+**Infrastructure:** GitHub Actions builds the site and uploads it over explicit
+FTPS (lftp) to Apache on shared hosting. Daily scheduled builds for the blog.
 
-No UI framework, no CSS framework, no state library. For a site this size they
-would have added weight without removing work.
+**Third parties:** GA4 and Google Maps, both loaded only after cookie consent.
+
+I didn't use a UI kit, a CSS framework or a state library. The site is not big
+enough to need them, and writing the CSS myself made it easier to match the
+look the agency wanted.
 
 ## Engineering highlights
 
-### Recovering a project with no version control
+### Moving from a Vite SPA to static Astro
 
-The site was already live, but the source had drifted from production and
-nothing was under version control. I reconstructed the source until a clean
-build matched the deployed version, verified the output artefact by artefact,
-then placed the project under Git.
+The first version was a single page app built with Vite and React Router. It
+worked, but meta tags and JSON-LD were only added in the browser, so Facebook
+and WhatsApp link previews couldn't see them. I moved the project to Astro
+with React islands. Every page is now a real HTML file with its own tags in
+`<head>`, and the React components still run where they're needed. The
+`.htaccess` rules had to change too, so that `/contact` serves `contact.html`
+and `/blog` doesn't clash with the `blog/` folder.
 
-### Automated deployment to legacy shared hosting
+### A blog that publishes itself
 
-I built a GitHub Actions pipeline that type-checks, lints, builds, validates,
-and deploys over FTPS with certificate verification enabled. The validation gate
-blocks releases containing missing required files, source leakage, .env files,
-or sourcemaps. Assets upload before index.html to avoid broken intermediate
-states. A failed deployment was traced to an expired hosting certificate and
-fixed without disabling TLS verification.
+The agency wanted to post twice a week without touching Git. So the articles
+live in a Supabase table, and Astro reads them at build time with a custom
+content loader. A few details I'm happy with:
 
-### URL canonicalisation tested on real Apache
+- The RLS policy for the public key only returns finished articles whose date
+  has come, using Romanian time. Drafts and future posts can't be read with the
+  key from the bundle.
+- If Supabase is down, the build fails on purpose. Otherwise it would publish a
+  site with no articles, and the mirror would delete them from the server.
+- One function, `isPublished()`, decides what's live, and the list, the
+  article pages, the categories, RSS, the sitemap and the related posts all
+  use it.
 
-I implemented .htaccess rules to normalize HTTP/HTTPS, www, and trailing-slash
-variants, then tested them in a Docker Apache environment with mod_rewrite and
-TLS. Nineteen cases covering query strings, directories, and proxy headers now
-resolve with no loops and at most one redirect.
+### Editorial calendar in the panel
 
-### Custom SEO audit tooling
+Staff log in to the panel, open the calendar and tap a day. The form has the
+title, the URL (generated from the title and kept unique), category, keywords,
+where the final button points, a cover and the text in Markdown, with a live
+preview. The state of the article is never chosen by hand. It's Zero until it
+has text and a cover, then Realizat, and the deploy marks it Publicat once it's
+live. The main button changes its label to match: Salvează, Programează or
+Publică acum.
 
-I wrote a script that renders every route and checks structural SEO issues. It
-found four pages without an h1 and a 404 route that inherited SEO metadata from
-the previous page, which could create duplicate indexing. I fixed both and added
-JSON-LD for TravelAgency, Organization, WebSite, and breadcrumbs.
+### "Publish now" and the scheduled deploy
 
-### Image processing pipeline
+"Publică acum" calls a Supabase Edge Function. The function checks the staff
+session and sends a `repository_dispatch` event to GitHub, which starts the
+same deploy workflow as a normal push. The article is live in 3 to 4 minutes.
 
-I built a pipeline for tourist photos arriving in inconsistent formats and
-sizes. It normalizes orientation, strips metadata, generates thumbnail and
-lightbox WebP variants, creates blurred placeholders, and uses incremental
-caching and SHA-1 deduplication. 296 source photos currently generate 1,215
-responsive derivatives.
+Future articles go out with the daily build. At first I used the `timezone:`
+key on the cron, but one morning it just didn't run. Now there are two UTC
+crons, 04:07 and 05:07, so one of them always hits 07:07 in Romania in both
+summer and winter, and if GitHub skips one the other catches it.
 
-### Lightweight production validation
+### Deploying to shared hosting
 
-Instead of introducing a full test framework, I wrote a smoke test that renders
-every public page and currently runs 111 assertions. These checks cover
-structural rules, legal wording, consent flags, sensitive-data leakage, and
-internal-panel isolation.
+The hosting only offers FTP, so the workflow type checks, lints, builds and
+validates the output (required files present, no `.env`, no source files, no
+sourcemaps) before uploading over FTPS with certificate checks on. `lftp
+mirror --ignore-time` only compares sizes, which is fast but misses edits that
+keep the size the same, like changing "1.290 €" to "1.390 €". I fixed that
+with a sha256 manifest saved on the server: the next deploy compares hashes and
+uploads those files explicitly. `index.html` is uploaded last so a visitor
+never gets a page that points to missing assets.
 
-### Consent as application logic
+### Image pipeline
 
-Google Maps does not load until external-content consent is granted, and tests
-verify that the iframe is absent beforehand. Gallery images must pass a consent
-gate, and the cookie policy is generated from a typed inventory so published
-information stays aligned with actual site behavior.
+Tourists send photos in every format and size. The gallery script fixes the
+rotation, removes all metadata (GPS included), makes WebP thumbnails and
+lightbox sizes and a small blurred placeholder, and skips photos it has already
+processed. 326 originals turn into 1,335 files. Other scripts make separate
+hero crops for desktop and mobile in AVIF and WebP, and the 1200x630 preview
+images for social media.
 
-### CSS architecture and known limitations
+### Mobile first, for real
 
-A mobile-menu overlay was moved to a portal on body after backdrop-filter
-created an unexpected containing block for fixed descendants.
+People look at holidays on their phones a lot, so I built the mobile layout
+on its own and didn't just shrink the desktop. There's a bottom bar with a central action and
+a floating WhatsApp button. A small hook watches `visualViewport` and hides
+those fixed controls when the keyboard is open, so they never cover the field
+you're typing in. On the about page the team photo (1.37 MB) is not rendered
+at all on small screens, instead of being hidden with CSS and still
+downloaded.
 
-The current SPA injects metadata and JSON-LD client-side. Google renders it
-correctly, but social scrapers do not, so link previews rely on static metadata.
-Properly solving this would require server-side rendering rather than a
-workaround.
+### Smaller things that add up
+
+- Canonical URLs: http/https, www and trailing slash variants all end up at one
+  address with a single 301. I tested the first version of these rules on
+  Apache in Docker before putting them live.
+- Consent: Google Maps and GA4 don't load before the visitor agrees, and gallery
+  photos only show up if the tourist's consent is confirmed.
+- Forms: a honeypot field, a minimum fill time and rate limits per email and
+  overall. Bots get a fake success so they don't know they were blocked.
+- Panel sessions live in `sessionStorage` and log out after 2 hours of
+  inactivity.
+- Structured data for the agency, breadcrumbs and every blog post, with
+  nothing made up (no fake ratings or reviews).
+
+## Performance, SEO and GDPR
+
+Lighthouse 12.6 on the live site, 27.10.2026 (home, gallery, a blog article):
+
+| | Performance | Accessibility | Best practices | SEO |
+|---|---|---|---|---|
+| Desktop | 99 | 96 to 100 | 100 | 100 |
+| Mobile | 75 to 82 | 100 | 100 | 100 |
+
+No layout shift anywhere (CLS 0). Accessibility on mobile went from 95 to 100
+after I allowed pinch zoom again. On mobile the weak spot is LCP (4.5 to 5 s
+on Lighthouse's slow 4G simulation), because the first screen has a large
+photo. That's the next thing I want to improve.
+
+Cookie consent works like this: GA4 and Google Maps don't load at all until
+the visitor agrees, "reject all" is one click just like "accept all", the
+choice can be changed any time from the footer and is asked again after 6
+months. The cookie policy page is generated from the same list of cookies the
+code actually uses, so the two can't drift apart.
 
 ## Screenshots
 
 | | |
 |---|---|
-| ![Home page](screenshots/01-home-desktop.jpg) | ![Services hub](screenshots/02-services-desktop.jpg) |
-| **Home**, hero and primary funnel entry | **Services hub**, sticky section nav and alternating two-column layout |
-| ![Gallery](screenshots/03-gallery-filters-masonry.jpg) | ![Request wizard](screenshots/04-request-wizard.jpg) |
-| **Gallery**, country filters with live counts, then a second level of filters per locality | **Request wizard**, the final step with the running summary filled in |
+| ![Home page](screenshots/01-home-desktop.jpg) | ![Services page](screenshots/02-services-desktop.jpg) |
+| **Home.** The hero and the main way into the request form. | **Services.** Sticky section menu and the two column layout. |
+| ![Gallery](screenshots/03-gallery-desktop.jpg) | ![Lightbox](screenshots/04-gallery-lightbox.jpg) |
+| **Gallery.** Country filters with counts, then a second row of filters for each place. | **Lightbox.** The counter only counts photos in the active filter. |
 
-![Lightbox](screenshots/05-gallery-lightbox.jpg)
+### Mobile version
 
-**Lightbox**, an accessible modal portalled out of the page. The counter reads
-19 of 24 rather than 19 of 296, because navigation stays inside the active
-filter.
+<p>
+  <img src="screenshots/05-mobile-home.jpg" width="240" alt="Home page on a phone">
+  <img src="screenshots/06-mobile-menu.jpg" width="240" alt="Menu on a phone">
+  <img src="screenshots/07-mobile-gallery.jpg" width="240" alt="Gallery on a phone">
+</p>
 
-<img src="screenshots/06-mobile.jpg" width="320" alt="Home page on a phone">
+The bottom bar and the floating contact button are made for thumbs, not copied
+from the desktop.
 
-**Mobile**, the same site on a phone. The bottom bar with a central action and
-the floating contact button are built for touch, not scaled down from the
-desktop layout.
+### Automated blog
+
+| | |
+|---|---|
+| ![Blog list](screenshots/08-blog-list.jpg) | ![Blog article](screenshots/09-blog-article.jpg) |
+| **Blog.** Categories and the latest articles, all static HTML. | **Article.** The cover, the table of contents and the text, rendered from Markdown at build time. |
+
+### Internal panel
+
+| | |
+|---|---|
+| ![Editorial calendar](screenshots/10-panel-calendar.jpg) | ![Article editor](screenshots/11-panel-editor.jpg) |
+| **Editorial calendar.** The month grid, with the posting days marked and each article colored by its state. | **Editor.** Date, title, URL, category, keywords, where the final button points and the cover. The state is shown, not picked. |
+
+![Article preview](screenshots/12-panel-preview.jpg)
+
+**Preview.** How the article will look on the site, plus the description
+Google will show, before anything goes live.
+
+The panel also has the holiday requests and the contact messages. I left them
+out of the screenshots on purpose, because they hold clients' personal data.
 
 ## Code samples
 
-Seven files from the production codebase are in [`code/`](code/), with a short
-note on each explaining what is worth reading and why. They cover frontend
-implementation, the image pipeline, SEO, canonicalisation, CI/CD and testing.
+There are eleven files from the production code in [`code/`](code/), with a
+short note on each one. They cover the blog loader and its RLS, the editorial
+calendar, the publish function, the deploy workflow, the Apache rules, the
+image pipeline, the lightbox and a few smaller pieces.
 
-## Maintenance
+## About maintenance
 
-The site is live and I still work on it. Recent work includes adding a services
-hub, splitting a section into its own page, a full technical SEO pass, gallery
-expansions as new photos arrive, and accessibility adjustments to navigation.
+The site is live and I keep working on it. Since launch I have:
+
+- moved the whole project from a Vite SPA to Astro;
+- added the blog, the editorial calendar and the "Publică acum" flow;
+- simplified the panel after the staff started using it (delete with an X,
+  automatic state, editable URL);
+- added the contact form and email confirmations for requests;
+- kept growing the gallery as new photos come in;
+- fixed the cron after the timezone problem.
+
+There is also a routine part. I look at Analytics, Search Console and the
+Business Profile stats regularly: which pages people visit, which searches
+show the site, what isn't indexed yet. That's what decides which articles go
+into the editorial calendar next and what I change on the site. New articles
+go out twice a week.
+
+One thing still on my list: the old smoke test and SEO audit scripts were
+written for the SPA version and need to be ported to Astro.
 
 ## Future development
 
-The next major technical direction for MIRIMODO is an automated travel search
-engine designed to handle 500+ GB of travel data daily and improve large-scale
-offer discovery. This is planned work, not built yet.
+The next big step is connecting MIRIMODO with **Quick-Sell**, a travel search
+engine platform that searches prices automatically for users. The idea is that
+a visitor can see real offers and prices on their own, instead of only sending
+a request and waiting for the agency to search for them. This is planned work
+and it's not built yet.
 
 ## License note
 
-This repository contains selected, sanitized excerpts from a commercial
-production project for portfolio and technical review purposes. It is not the
-complete production codebase.
+This repository has selected and cleaned up parts of a commercial production
+project, for portfolio and technical review only. It's not the full codebase.
+All rights are reserved: please don't copy or reuse the code, the text or the
+images without my permission.
