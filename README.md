@@ -9,7 +9,7 @@ on schedule, and an internal panel for the agency staff.
 
 **Status:** live in production and maintained by me.
 
-**▶ [Download the video walkthrough (MP4, 15 MB)](https://raw.githubusercontent.com/MiriModo/mirimodo-web-case-study/preview/mirimodo-case-study-video.mp4)**
+**▶ [Download the video walkthrough (MP4, 15 MB)](https://raw.githubusercontent.com/MiriModo/mirimodo-web-case-study/main/mirimodo-case-study-video.mp4)**
 
 ## My role
 
