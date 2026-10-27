@@ -9,6 +9,10 @@ on schedule, and an internal panel for the agency staff.
 
 **Status:** live in production and maintained by me.
 
+**▶ [Watch the video walkthrough](mirimodo-case-study-video.mp4)**
+
+<a href="mirimodo-case-study-video.mp4"><img src="screenshots/01-home-desktop.jpg" width="720" alt="Video walkthrough of mirimodo.ro, click to play"></a>
+
 ## My role
 
 I did the whole project by myself. That means talking with the agency about
